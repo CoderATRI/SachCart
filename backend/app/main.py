@@ -21,11 +21,20 @@ from app.security import (
     increment_running,
     redis_client,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from app.storage import generate_presigned_url
 from app.telemetry import setup_telemetry
 
-app = FastAPI(title="SachCart API", docs_url=None, redoc_url=None)
+app = FastAPI(title="SachCart API", docs_url="/docs", redoc_url="/redoc")
 setup_telemetry(app)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def on_startup():
@@ -37,6 +46,24 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
+
+@app.get("/")
+def root():
+    return {
+        "service": "SachCart API",
+        "status": "online",
+        "health": "/api/health",
+        "docs": "/docs",
+        "redoc": "/redoc",
+        "endpoints": {
+            "health": "GET /api/health",
+            "create_audit": "POST /api/audits",
+            "get_audit": "GET /api/audits/{id}",
+            "audit_events": "GET /api/audits/{id}/events",
+            "toggle_watch": "POST /api/audits/{id}/watch",
+            "evidence": "GET /evidence/{audit_id}/{uuid}",
+        },
+    }
 
 @app.get("/api/health")
 def health():
