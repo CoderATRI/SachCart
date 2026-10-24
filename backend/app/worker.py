@@ -1,6 +1,12 @@
 import sys
 import json
 import asyncio
+
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -211,6 +217,8 @@ async def process_audit(audit_id: str, client_ip: str):
                 ),
             )
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             audit = db.query(Audit).filter(Audit.id == audit_id).first()
             if audit:
                 audit.status = "failed"

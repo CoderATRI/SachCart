@@ -26,9 +26,7 @@ export default function HomePage() {
       if (stored) {
         setRecentAudits(JSON.parse(stored));
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
   const saveToRecent = (id: string, productUrl: string) => {
@@ -36,9 +34,7 @@ export default function HomePage() {
       let domain = "product";
       try {
         domain = new URL(productUrl).hostname;
-      } catch {
-        // ignore
-      }
+      } catch {}
       const item: RecentAudit = {
         id,
         url: productUrl,
@@ -48,9 +44,7 @@ export default function HomePage() {
       const updated = [item, ...recentAudits.filter((a) => a.id !== id)].slice(0, 5);
       setRecentAudits(updated);
       localStorage.setItem("sachcart_recent_audits", JSON.stringify(updated));
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -1,17 +1,15 @@
 "use client";
 
-import React, { useEffect, useState, use } from "react";
+import React, { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import StageCards from "@/components/StageCards";
 import ScoreDial from "@/components/ScoreDial";
 import FindingCard from "@/components/FindingCard";
 import { getAuditReport, toggleWatch, AuditReport } from "@/lib/api";
 
-interface PageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default function AuditPage({ params }: PageProps) {
-  const { id } = use(params);
+export default function AuditPage() {
+  const routeParams = useParams();
+  const id = routeParams?.id as string;
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [streamingUrl, setStreamingUrl] = useState<string | null>(null);
@@ -21,6 +19,7 @@ export default function AuditPage({ params }: PageProps) {
   const [watchActive, setWatchActive] = useState(false);
 
   useEffect(() => {
+    if (!id) return;
     let es: EventSource | null = null;
 
     async function loadInitial() {
@@ -58,9 +57,7 @@ export default function AuditPage({ params }: PageProps) {
                 setLoading(false);
               });
             }
-          } catch {
-            // ignore
-          }
+          } catch {}
         };
 
         es.onerror = () => {
@@ -86,9 +83,7 @@ export default function AuditPage({ params }: PageProps) {
     try {
       const res = await toggleWatch(id);
       setWatchActive(res.watch);
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   const handleCopyLink = () => {
@@ -115,7 +110,9 @@ export default function AuditPage({ params }: PageProps) {
             <div className="logo-icon">S</div>
             <span className="logo-text">SachCart</span>
           </a>
-          <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>Audit #{id.slice(0, 8)}</span>
+          <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+            Audit #{typeof id === "string" ? id.slice(0, 8) : ""}
+          </span>
         </header>
 
         <section className="card" style={{ textAlign: "center", padding: "40px 24px" }}>
