@@ -71,7 +71,8 @@ def check_rate_limits(request: Request) -> str:
     client_ip = get_client_ip(request)
     header_key = request.headers.get("x-api-key")
     has_valid_key = is_valid_api_key(header_key)
-    limit = 100 if has_valid_key else 5
+    is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+    limit = 100 if (has_valid_key or is_local) else 5
     rate_key = f"rate:hour:{client_ip}"
     current = redis_client.incr(rate_key)
     if current == 1:
@@ -85,6 +86,7 @@ def check_rate_limits(request: Request) -> str:
 
 def increment_running(client_ip: str):
     redis_client.incr(f"running:{client_ip}")
+    redis_client.expire(f"running:{client_ip}", 600)
 
 def decrement_running(client_ip: str):
     count = redis_client.decr(f"running:{client_ip}")

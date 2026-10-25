@@ -35,6 +35,7 @@ class Audit(Base):
     watch = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     finished_at = Column(DateTime(timezone=True), nullable=True)
+    failure_reason = Column(String(512), nullable=True)
 
     findings = relationship("Finding", back_populates="audit", cascade="all, delete-orphan")
     competitor_prices = relationship("CompetitorPrice", back_populates="audit", cascade="all, delete-orphan")
@@ -76,7 +77,16 @@ class Evidence(Base):
     audit = relationship("Audit", back_populates="evidence")
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 5432), timeout=1):
+            pass
+        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE audits ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(512);"))
+            conn.commit()
+    except Exception:
+        pass
 
 def get_db():
     db = SessionLocal()

@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sachcart -d sachcart"]
+      test: [ "CMD-SHELL", "pg_isready -U sachcart -d sachcart" ]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -24,7 +24,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -46,3 +46,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+

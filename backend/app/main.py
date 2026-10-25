@@ -2,11 +2,12 @@ import json
 import uuid
 from urllib.parse import urlparse
 import asyncio
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse, RedirectResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.config import settings
-from app.db import init_db, get_db, Audit, Finding, CompetitorPrice, Evidence
+from app.db import init_db, get_db, engine, Audit, Finding, CompetitorPrice, Evidence
 from app.schemas import (
     AuditCreateRequest,
     AuditCreateResponse,
@@ -21,29 +22,30 @@ from app.security import (
     increment_running,
     redis_client,
 )
-from fastapi.middleware.cors import CORSMiddleware
+import boto3
+from botocore.client import Config
 from app.storage import generate_presigned_url
 from app.telemetry import setup_telemetry
 
 app = FastAPI(title="SachCart API", docs_url="/docs", redoc_url="/redoc")
 setup_telemetry(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    try:
+        init_db()
+    except Exception:
+        pass
 
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store"
+    if "text/event-stream" in response.headers.get("content-type", ""):
+        response.headers["Cache-Control"] = "no-cache, no-transform"
+        response.headers["Connection"] = "keep-alive"
+        response.headers["X-Accel-Buffering"] = "no"
+    else:
+        response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
@@ -66,8 +68,59 @@ def root():
     }
 
 @app.get("/api/health")
-def health():
-    return {"status": "ok"}
+def health(response: Response):
+    statuses = {
+        "postgres": "down",
+        "redis": "down",
+        "minio": "down",
+        "worker": "down",
+    }
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 5432), timeout=2):
+            pass
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        statuses["postgres"] = "up"
+    except Exception:
+        statuses["postgres"] = "down"
+
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 6379), timeout=2):
+            pass
+        if redis_client.ping():
+            statuses["redis"] = "up"
+            hb = redis_client.get("worker:heartbeat")
+            statuses["worker"] = "up" if hb else "down"
+    except Exception:
+        statuses["redis"] = "down"
+        statuses["worker"] = "down"
+
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 9000), timeout=2):
+            pass
+        endpoint = settings.MINIO_PUBLIC_URL if settings.MINIO_PUBLIC_URL.startswith("http") else f"http://{settings.MINIO_ENDPOINT}"
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4", connect_timeout=2, read_timeout=2),
+            region_name="us-east-1",
+        )
+        s3.list_buckets()
+        statuses["minio"] = "up"
+    except Exception:
+        statuses["minio"] = "down"
+
+    if statuses["postgres"] != "up" or statuses["redis"] != "up" or statuses["minio"] != "up":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    else:
+        response.status_code = status.HTTP_200_OK
+
+    return statuses
 
 @app.post("/api/audits", status_code=status.HTTP_202_ACCEPTED, response_model=AuditCreateResponse)
 def create_audit(
@@ -162,6 +215,7 @@ def get_audit(audit_id: str, db: Session = Depends(get_db)):
         watch=audit.watch,
         created_at=audit.created_at,
         finished_at=audit.finished_at,
+        failure_reason=audit.failure_reason,
         findings=findings_list,
         competitor_prices=competitors_list,
         evidence=evidence_list,
@@ -185,6 +239,7 @@ async def get_audit_events(audit_id: str, db: Session = Depends(get_db)):
                 "status": audit.status,
                 "score": audit.score,
                 "reached_stage": audit.reached_stage,
+                "failure_reason": audit.failure_reason,
             }
             yield f"data: {json.dumps(final_data)}\n\n"
             return

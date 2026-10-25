@@ -55,9 +55,30 @@ export interface AuditReport {
   watch: boolean;
   created_at: string;
   finished_at?: string | null;
+  failure_reason?: string | null;
   findings: Finding[];
   competitor_prices: CompetitorPrice[];
   evidence: EvidenceItem[];
+}
+
+export interface HealthStatus {
+  postgres: "up" | "down";
+  redis: "up" | "down";
+  minio: "up" | "down";
+  worker: "up" | "down";
+}
+
+export async function getHealth(): Promise<{ ok: boolean; status: HealthStatus | null; error?: string }> {
+  try {
+    const res = await fetch("/api/health");
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return { ok: false, status: data, error: "Backend not reachable" };
+    }
+    return { ok: true, status: data };
+  } catch {
+    return { ok: false, status: null, error: "Backend not reachable" };
+  }
 }
 
 export async function createAudit(url: string, watch: boolean = false): Promise<{ id: string }> {

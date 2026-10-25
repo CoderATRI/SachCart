@@ -4,9 +4,10 @@ const cspHeader = `
   default-src 'self';
   script-src 'self' 'unsafe-inline' 'unsafe-eval';
   style-src 'self' 'unsafe-inline';
-  img-src 'self' data:;
-  media-src 'self' http://127.0.0.1:9000 http://localhost:9000;
+  img-src 'self' data: blob: https: http://127.0.0.1:9000 http://localhost:9000;
+  media-src 'self' blob: https: http://127.0.0.1:9000 http://localhost:9000;
   connect-src 'self';
+  frame-src 'self' https://*.tinyfish.io https://*.tetra-data.production.tinyfish.io;
   frame-ancestors 'none';
 `.replace(/\s{2,}/g, " ").trim();
 

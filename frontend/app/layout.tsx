@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   description: "Reveal drip pricing, dark patterns under CCPA 2023, and real competitor price comparisons before you pay.",
 };
 
+import HealthBanner from "@/components/HealthBanner";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -13,7 +15,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <HealthBanner />
+        {children}
+      </body>
     </html>
   );
 }

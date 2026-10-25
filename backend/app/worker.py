@@ -27,7 +27,7 @@ from app.tinyfish import (
     search_competitors,
     stream_agent_walk,
 )
-from app.claude import extract_listing_facts, extract_competitor_price
+from app.claude import extract_listing_facts, extract_competitor_price, ClaudeError
 from app.analyzer import analyze_audit
 from app.storage import store_evidence_from_url
 from app.security import decrement_running
@@ -101,6 +101,8 @@ async def run_walk_step(url: str, audit_id: str, retry_count: int = 0) -> tuple[
 
             res = terminal_event.get("result") or {}
             walk_result.reached_stage = res.get("reached_stage", "failed" if status == "FAILED" else "inconclusive")
+            if status == "FAILED" or err_code:
+                extra_data["failure_reason"] = f"TinyFish {err_code}" if err_code else (error.get("message") or "TinyFish run failed")
             for cl in res.get("charge_lines", []):
                 walk_result.charge_lines.append(
                     ChargeLine(
@@ -162,6 +164,20 @@ async def process_audit(audit_id: str, client_ip: str):
                 read_task, walk_task
             )
 
+            if walk_result.reached_stage == "failed" and extra_data.get("failure_reason"):
+                reason = extra_data["failure_reason"]
+                audit.status = "failed"
+                audit.reached_stage = "failed"
+                audit.failure_reason = reason
+                audit.tinyfish_run_id = extra_data.get("tinyfish_run_id")
+                audit.finished_at = datetime.utcnow()
+                db.commit()
+                redis_client.publish(
+                    f"audit:{audit_id}",
+                    json.dumps({"type": "AUDIT_FINISHED", "status": "failed", "error": reason, "failure_reason": reason}),
+                )
+                return
+
             score, findings = await analyze_audit(audit_id, listing, walk_result, competitors)
 
             audit.status = "done"
@@ -217,20 +233,38 @@ async def process_audit(audit_id: str, client_ip: str):
                 ),
             )
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            reason = str(e)
+            if hasattr(e, "reason"):
+                reason = getattr(e, "reason")
+            elif isinstance(e, ClaudeError):
+                reason = e.reason
+            elif "SITE_BLOCKED" in str(e).upper():
+                reason = "TinyFish SITE_BLOCKED"
+            elif "TIMEOUT" in str(e).upper():
+                reason = "TinyFish TIMEOUT"
+            elif "401" in str(e) or "auth" in str(e).lower() or "key" in str(e).lower():
+                reason = "Claude API key rejected"
             audit = db.query(Audit).filter(Audit.id == audit_id).first()
             if audit:
                 audit.status = "failed"
+                audit.failure_reason = reason
                 audit.finished_at = datetime.utcnow()
                 db.commit()
             redis_client.publish(
                 f"audit:{audit_id}",
-                json.dumps({"type": "AUDIT_FINISHED", "status": "failed", "error": str(e)}),
+                json.dumps({"type": "AUDIT_FINISHED", "status": "failed", "error": reason, "failure_reason": reason}),
             )
         finally:
             decrement_running(client_ip)
             db.close()
+
+async def heartbeat_loop():
+    while True:
+        try:
+            redis_client.set("worker:heartbeat", "1", ex=30)
+        except Exception:
+            pass
+        await asyncio.sleep(10)
 
 async def hourly_watch_scheduler():
     while True:
@@ -268,6 +302,11 @@ async def hourly_watch_scheduler():
 
 async def main():
     init_db()
+    try:
+        redis_client.set("worker:heartbeat", "1", ex=30)
+    except Exception:
+        pass
+    asyncio.create_task(heartbeat_loop())
     asyncio.create_task(hourly_watch_scheduler())
     while True:
         loop = asyncio.get_running_loop()

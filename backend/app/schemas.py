@@ -118,6 +118,7 @@ class AuditReportResponse(BaseModel):
     watch: bool = False
     created_at: datetime
     finished_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
     findings: list[FindingSchema] = Field(default_factory=list)
     competitor_prices: list[CompetitorPriceSchema] = Field(default_factory=list)
     evidence: list[EvidenceSchema] = Field(default_factory=list)
