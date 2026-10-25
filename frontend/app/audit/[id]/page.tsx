@@ -18,25 +18,50 @@ export default function AuditPage() {
   const [copied, setCopied] = useState(false);
   const [watchActive, setWatchActive] = useState(false);
 
+  const [reconnecting, setReconnecting] = useState(false);
+
   useEffect(() => {
     if (!id) return;
     let es: EventSource | null = null;
+    let pollInterval: NodeJS.Timeout | null = null;
+    let active = true;
 
-    async function loadInitial() {
+    async function checkStatus() {
       try {
         const data = await getAuditReport(id);
+        if (!active) return false;
         setReport(data);
         setWatchActive(data.watch);
-        if (data.tinyfish_run_id && data.streaming_url) {
+        if (data.streaming_url) {
           setStreamingUrl(data.streaming_url);
         }
         if (data.status === "done" || data.status === "failed") {
           setLoading(false);
-          return;
+          setReconnecting(false);
+          if (pollInterval) clearInterval(pollInterval);
+          if (es) {
+            es.close();
+            es = null;
+          }
+          return true;
         }
+      } catch {}
+      return false;
+    }
 
+    function connectSSE() {
+      if (es) {
+        es.close();
+        es = null;
+      }
+      try {
         es = new EventSource(`/api/audits/${id}/events`);
+        es.onopen = () => {
+          if (active) setReconnecting(false);
+        };
         es.onmessage = (event) => {
+          if (!active) return;
+          setReconnecting(false);
           try {
             const parsed = JSON.parse(event.data);
             if (parsed.type === "STREAMING_URL" && parsed.streaming_url) {
@@ -50,32 +75,42 @@ export default function AuditPage() {
                 setCurrentStage("checkout");
               }
             } else if (parsed.type === "COMPLETE" || parsed.type === "AUDIT_FINISHED") {
-              if (es) es.close();
-              getAuditReport(id).then((finalReport) => {
-                setReport(finalReport);
-                setWatchActive(finalReport.watch);
-                setLoading(false);
-              });
+              checkStatus();
             }
           } catch {}
         };
-
-        es.onerror = () => {
-          if (es) es.close();
-          getAuditReport(id).then((finalReport) => {
-            setReport(finalReport);
-            setLoading(false);
-          });
+        es.onerror = async () => {
+          if (!active) return;
+          setReconnecting(true);
+          const finished = await checkStatus();
+          if (!finished && active) {
+            setTimeout(() => {
+              if (active) connectSSE();
+            }, 3000);
+          }
         };
-      } catch {
-        setLoading(false);
-      }
+      } catch {}
     }
 
-    loadInitial();
+    async function start() {
+      const finished = await checkStatus();
+      if (finished || !active) return;
+      connectSSE();
+
+      pollInterval = setInterval(async () => {
+        const isDone = await checkStatus();
+        if (isDone && pollInterval) {
+          clearInterval(pollInterval);
+        }
+      }, 3000);
+    }
+
+    start();
 
     return () => {
+      active = false;
       if (es) es.close();
+      if (pollInterval) clearInterval(pollInterval);
     };
   }, [id]);
 
@@ -102,7 +137,7 @@ export default function AuditPage() {
     return "Severe dark patterns and price discrepancies identified under India CCPA 2023 Guidelines.";
   };
 
-  if (loading && (!report || report.status === "queued" || report.status === "running")) {
+  if (!report || report.status === "queued" || report.status === "running") {
     return (
       <main className="container">
         <header className="header-bar">
@@ -147,12 +182,32 @@ export default function AuditPage() {
               </a>
             </div>
           )}
+
+          {reconnecting && (
+            <div
+              style={{
+                marginTop: "16px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 14px",
+                borderRadius: "6px",
+                background: "var(--warning-high-bg)",
+                color: "var(--warning-high)",
+                fontSize: "13px",
+                fontWeight: 600,
+              }}
+            >
+              ● Reconnecting to live stream...
+            </div>
+          )}
         </section>
       </main>
     );
   }
 
   if (!report || report.status === "failed") {
+    const failureReason = report?.failure_reason || "The retailer blocked automated guest access or required user login to view cart.";
     return (
       <main className="container">
         <header className="header-bar">
@@ -165,8 +220,8 @@ export default function AuditPage() {
           <h2 style={{ color: "var(--warning-high)", fontSize: "22px", fontWeight: 700, marginBottom: "8px" }}>
             Audit Inconclusive or Failed
           </h2>
-          <p style={{ color: "var(--text-muted)", fontSize: "14px", marginBottom: "20px" }}>
-            The retailer blocked automated guest access or required user login to view cart.
+          <p style={{ color: "var(--text-main)", fontWeight: 500, fontSize: "15px", marginBottom: "20px" }}>
+            {failureReason}
           </p>
           <a
             href="/"

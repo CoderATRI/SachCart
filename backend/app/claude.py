@@ -5,49 +5,30 @@ from app.config import settings
 from app.telemetry import record_span
 from app.schemas import ListingFacts, ClassifiedFinding, CCPA_CATEGORIES
 
+class ClaudeError(Exception):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+def map_anthropic_error(e: Exception) -> ClaudeError:
+    if isinstance(e, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return ClaudeError("Claude API key rejected")
+    if isinstance(e, anthropic.BadRequestError):
+        msg = str(e).lower()
+        if any(term in msg for term in ("credit", "billing", "balance", "quota", "funds")):
+            return ClaudeError("Anthropic credit or billing problem")
+    if isinstance(e, anthropic.APIStatusError):
+        if e.status_code in (401, 403):
+            return ClaudeError("Claude API key rejected")
+        if e.status_code == 402:
+            return ClaudeError("Anthropic credit or billing problem")
+        msg = str(e).lower()
+        if any(term in msg for term in ("credit", "billing", "balance", "quota", "funds")):
+            return ClaudeError("Anthropic credit or billing problem")
+    return ClaudeError("Claude API key rejected" if "auth" in str(e).lower() or "401" in str(e) else "Claude request failed")
+
 def get_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.strip())
-
-def extract_fallback_facts(page_text: str) -> ListingFacts:
-    title = None
-    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-    for line in lines:
-        if line.startswith("# "):
-            title = line.lstrip("# ").strip()
-            break
-    if not title and lines:
-        title = lines[0].strip("# ")
-
-    sale_price = None
-    mrp = None
-    price_matches = re.findall(r"(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{2})?)", page_text)
-    numeric_prices = []
-    for pm in price_matches:
-        try:
-            val = float(pm.replace(",", ""))
-            if val > 0:
-                numeric_prices.append(val)
-        except ValueError:
-            pass
-    if numeric_prices:
-        sale_price = min(numeric_prices)
-        if len(numeric_prices) > 1:
-            larger = [p for p in numeric_prices if p > sale_price]
-            if larger:
-                mrp = max(larger)
-
-    badge = None
-    badge_match = re.search(r"(\d{1,2}%\s*(?:off|OFF|discount))", page_text)
-    if badge_match:
-        badge = badge_match.group(1)
-
-    return ListingFacts(
-        title=title[:255] if title else None,
-        sale_price=sale_price,
-        mrp=mrp,
-        currency="INR",
-        discount_badge_text=badge,
-    )
 
 async def extract_listing_facts(page_text: str, audit_id: str) -> ListingFacts:
     with record_span("claude.extract", audit_id):
@@ -86,8 +67,8 @@ async def extract_listing_facts(page_text: str, audit_id: str) -> ListingFacts:
                 content = "\n".join(lines).strip()
             data = json.loads(content)
             return ListingFacts(**data)
-        except Exception:
-            return extract_fallback_facts(page_text)
+        except anthropic.APIError as e:
+            raise map_anthropic_error(e)
 
 async def extract_competitor_price(page_text: str, audit_id: str) -> float | None:
     with record_span("claude.extract", audit_id):
@@ -118,16 +99,8 @@ async def extract_competitor_price(page_text: str, audit_id: str) -> float | Non
             parsed = json.loads(content)
             p = parsed.get("price")
             return float(p) if p is not None else None
-        except Exception:
-            prices = re.findall(r"(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{2})?)", page_text)
-            for p_str in prices:
-                try:
-                    val = float(p_str.replace(",", ""))
-                    if val > 0:
-                        return val
-                except ValueError:
-                    pass
-            return None
+        except anthropic.APIError as e:
+            raise map_anthropic_error(e)
 
 async def classify_ambiguous_items(
     items: list[dict],
@@ -185,6 +158,8 @@ async def classify_ambiguous_items(
                     )
                 )
             return findings
+        except anthropic.APIError as e:
+            raise map_anthropic_error(e)
         except Exception:
             fallback_findings = []
             for item in items:
