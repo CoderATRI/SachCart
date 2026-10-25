@@ -80,6 +80,32 @@ def check_services() -> tuple[bool, str]:
         return False, f"MinIO connection failed ({e}). Run 'docker compose up -d' to start MinIO."
     return True, f"Postgres, Redis, and MinIO reachable (bucket '{settings.MINIO_BUCKET}' ready)"
 
+def check_outside_env_keys() -> tuple[bool, str]:
+    outside = []
+    for var in ("ANTHROPIC_API_KEY", "TINYFISH_API_KEY"):
+        if var in os.environ:
+            outside.append(f"{var} in session environment")
+    if sys.platform == "win32":
+        import winreg
+        for subkey, hkey, label in [
+            (r"Environment", winreg.HKEY_CURRENT_USER, "Windows User Environment"),
+            (r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", winreg.HKEY_LOCAL_MACHINE, "Windows System Environment"),
+        ]:
+            try:
+                with winreg.OpenKey(hkey, subkey) as k:
+                    for var in ("ANTHROPIC_API_KEY", "TINYFISH_API_KEY"):
+                        try:
+                            val, _ = winreg.QueryValueEx(k, var)
+                            if val:
+                                outside.append(f"{var} in {label}")
+                        except FileNotFoundError:
+                            pass
+            except Exception:
+                pass
+    if outside:
+        return False, f"API key(s) detected outside .env: {', '.join(outside)}. Remove external environment variables so .env is the exclusive source."
+    return True, "No API keys set outside .env; .env is the exclusive source"
+
 def check_env_keys() -> tuple[bool, str]:
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     if not env_path.exists():
@@ -113,8 +139,13 @@ def check_anthropic_key() -> tuple[bool, str]:
         return False, "ANTHROPIC_API_KEY is empty in .env. Obtain a key from Anthropic console."
     try:
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY.strip())
-        client.models.list()
-        return True, "ANTHROPIC_API_KEY verified via models list"
+        models_resp = client.models.list()
+        model_ids = [m.id for m in models_resp.data]
+        if settings.CLAUDE_MODEL not in model_ids:
+            return False, f"Configured CLAUDE_MODEL '{settings.CLAUDE_MODEL}' not found for key: {model_ids}."
+        return True, f"ANTHROPIC_API_KEY verified and model '{settings.CLAUDE_MODEL}' exists"
+    except anthropic.AuthenticationError:
+        return False, "Claude API key rejected. Check your Anthropic API key in .env."
     except Exception as e:
         return False, f"ANTHROPIC_API_KEY verification failed ({e}). Check your Anthropic API key."
 
@@ -125,9 +156,10 @@ def main():
         ("Docker and daemon", check_docker),
         ("Ports 3000 and 8000", check_ports),
         ("Postgres, Redis, and MinIO", check_services),
+        ("Outside environment override", check_outside_env_keys),
         (".env configuration", check_env_keys),
         ("TinyFish API key", check_tinyfish_key),
-        ("Anthropic API key", check_anthropic_key),
+        ("Anthropic API key and model", check_anthropic_key),
     ]
     failed = False
     for name, check_func in checks:
