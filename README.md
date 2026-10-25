@@ -48,11 +48,11 @@ Powered by **TinyFish Web Agent** for autonomous browser navigation, **Claude** 
 
 ### Prerequisites
 - Windows 11 / Linux / macOS
-- Python 3.11+
-- Node.js 18+ and npm
+- Python 3.12+
+- Node.js 20+ and npm
 - Docker Desktop (daemon running)
 - [TinyFish API Key](https://tinyfish.ai)
-- [Anthropic API Key](https://console.anthropic.com)
+- [Anthropic API Key](https://console.anthropic.com) (account with active credit balance is required)
 
 ### 1. Configuration
 Copy `.env.example` to `.env` and fill in your API keys:
@@ -73,21 +73,22 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
 `start.ps1` automatically:
-1. Validates preflight prerequisites (Python, Node, Docker, ports 3000 & 8000).
+1. Validates preflight prerequisites (Python, Node, Docker, ports 3000 & 8000, environment keys).
 2. Spawns PostgreSQL, Redis, and MinIO in Docker containers.
 3. Initializes the database schema and S3 buckets.
-4. Starts the FastAPI backend (`http://127.0.0.1:8000`), worker daemon, and Next.js frontend (`http://localhost:3000`).
-5. Opens `http://localhost:3000` in your default browser.
+4. Starts the FastAPI backend (`http://127.0.0.1:8000`), worker daemon, and Next.js frontend (`http://127.0.0.1:3000`) in titled windows.
+5. Waits for `http://127.0.0.1:3000/api/health` to report all services healthy.
+6. Opens `http://127.0.0.1:3000` in your default browser.
 
 ---
 
 ## 📡 API Endpoints
 
 - `POST /api/audits`: Submit product URL for asynchronous audit. Returns `202 Accepted` with audit UUID.
-- `GET /api/audits/{id}`: Retrieve audit report, deal integrity score, findings, and competitor comparisons.
+- `GET /api/audits/{id}`: Retrieve audit report, deal integrity score, findings, competitor comparisons, and real failure reason if failed.
 - `GET /api/audits/{id}/events`: Server-Sent Events (SSE) stream for live agent progress and streaming URLs.
 - `POST /api/audits/{id}/watch`: Toggle weekly price and dark pattern monitoring.
-- `GET /api/health`: Health status of database, Redis, and MinIO connections.
+- `GET /api/health`: Health status reporting PostgreSQL, Redis, MinIO, and worker liveness (200 OK if healthy, 503 if infrastructure is down).
 
 ---
 
